@@ -12,6 +12,7 @@ import (
 	management "github.com/rancher/shepherd/clients/rancher/generated/management/v3"
 	ext_unstructured "github.com/rancher/shepherd/extensions/unstructured"
 	"github.com/rancher/shepherd/pkg/wait"
+	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 
@@ -66,9 +67,10 @@ func ImportCluster(client *rancher.Client, cluster *apisV1.Cluster, rest *rest.C
 		Duration: 1 * time.Second,
 		Factor:   1.1,
 		Jitter:   0.1,
-		Steps:    20,
+		Steps:    40,
 	}
 
+	logrus.Infof("Listing ClusterRegistrationToken for cluster: %s", cluster.Status.ClusterName)
 	var token management.ClusterRegistrationToken
 	err := kwait.ExponentialBackoff(backoff, func() (finished bool, err error) {
 		res, err := client.Management.ClusterRegistrationToken.List(&types.ListOpts{Filters: map[string]interface{}{
@@ -78,6 +80,7 @@ func ImportCluster(client *rancher.Client, cluster *apisV1.Cluster, rest *rest.C
 			return false, err
 		}
 
+		logrus.Infof("token: %+v", res)
 		if len(res.Data) > 0 && res.Data[0].ManifestURL != "" {
 			token = res.Data[0]
 			return true, nil
@@ -100,6 +103,7 @@ func ImportCluster(client *rancher.Client, cluster *apisV1.Cluster, rest *rest.C
 		},
 	}
 
+	logrus.Infof("Listing service accounts in kube-system...")
 	kwait.ExponentialBackoff(backoff, func() (finished bool, err error) {
 		_, err = downClient.Resource(corev1.SchemeGroupVersion.WithResource("serviceaccounts")).Namespace("kube-system").List(context.TODO(), metav1.ListOptions{})
 		if err != nil {
@@ -109,6 +113,7 @@ func ImportCluster(client *rancher.Client, cluster *apisV1.Cluster, rest *rest.C
 		return true, nil
 	})
 
+	logrus.Infof("Creating service accounts in kube-system...")
 	_, err = downClient.Resource(corev1.SchemeGroupVersion.WithResource("serviceaccounts")).Namespace("kube-system").Create(context.TODO(), ext_unstructured.MustToUnstructured(sa), metav1.CreateOptions{})
 	if err != nil {
 		return err
@@ -154,6 +159,7 @@ func ImportCluster(client *rancher.Client, cluster *apisV1.Cluster, rest *rest.C
 		return err
 	}
 
+	logrus.Infof("Running Job...")
 	var user int64
 	var group int64
 	job := &batchv1.Job{
@@ -212,6 +218,7 @@ func ImportCluster(client *rancher.Client, cluster *apisV1.Cluster, rest *rest.C
 		return err
 	}
 
+	logrus.Infof("Job Finished...")
 	err = wait.WatchWait(jobWatch, func(event watch.Event) (bool, error) {
 		var wj batchv1.Job
 		_ = runtime.DefaultUnstructuredConverter.FromUnstructured(event.Object.(*unstructured.Unstructured).Object, &wj)
